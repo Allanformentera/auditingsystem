@@ -48,12 +48,12 @@ model User {
 model Student {
   id        String   @id @default(cuid())
   studentNo String?  @unique
-  firstName String
-  lastName  String
-  course    String
-  major     String   @default("")
+  firstName String   @db.VarChar(100)
+  lastName  String   @db.VarChar(100)
+  course    String   @db.VarChar(20)
+  major     String   @db.VarChar(20) @default("")
   yearLevel Int
-  block     String
+  block     String   @db.VarChar(20)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   payments  Payment[]
