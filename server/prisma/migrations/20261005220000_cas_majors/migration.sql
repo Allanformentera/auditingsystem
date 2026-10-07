@@ -1,0 +1,10 @@
+ALTER TABLE `Student` ADD COLUMN `major` VARCHAR(191) NOT NULL DEFAULT '';
+ALTER TABLE `Assessment` ADD COLUMN `major` VARCHAR(191) NOT NULL DEFAULT '';
+ALTER TABLE `SubmissionRow` ADD COLUMN `major` VARCHAR(191) NULL;
+DROP INDEX `Student_course_yearLevel_block_firstName_lastName_key` ON `Student`;
+DROP INDEX `Student_course_yearLevel_block_lastName_idx` ON `Student`;
+CREATE UNIQUE INDEX `Student_course_yearLevel_block_major_firstName_lastName_key` ON `Student`(`course`, `yearLevel`, `block`, `major`, `firstName`, `lastName`);
+CREATE INDEX `Student_course_yearLevel_block_major_lastName_idx` ON `Student`(`course`, `yearLevel`, `block`, `major`, `lastName`);
+UPDATE `Student` SET `course` = 'CAS' WHERE `course` = 'POLSCI';
+UPDATE `Assessment` SET `course` = 'CAS' WHERE `course` = 'POLSCI';
+UPDATE `SubmissionRow` SET `course` = 'CAS' WHERE `course` = 'POLSCI';
