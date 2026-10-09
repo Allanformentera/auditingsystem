@@ -103,6 +103,12 @@ body.dark .assess-toggle.off{background:#3a2321;border-color:#7a3a36;color:#e08d
 .fee-btn.unpaid{background:#c0453f;border-color:#c0453f;color:#fff}
 .fee-btn.unpaid:hover{background:#a23732}
 .fee-btn.static{cursor:default}
+.fee-action{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.receipt-input{width:74px;padding:7px 9px;border:1px solid #dfe5e1;border-radius:7px;font-size:12px;background:#fff;color:inherit}
+.receipt-input::placeholder{color:#9aa39e}
+.receipt-input:focus{border-color:#2a8262;outline:none;box-shadow:0 0 0 3px rgba(42,130,98,.18)}
+.fee-btn.receipt-save{background:#eef4f0;border-color:#c9d8cf;color:#27664e;min-width:0;padding:6px 12px}
+body.dark .receipt-input{background:#1a2621;border-color:#2b3a33}
 body.dark .assess-drop td{background:#141e1a}
 body.dark .fee-row{background:#1a2621;border-color:#2b3a33}
 body.dark .fee-info strong{color:#e8ece9}
@@ -114,8 +120,8 @@ body.dark .progress-opener .progress-track{background:#24332c}
 .avatar-preview{width:64px;height:64px;border-radius:50%;background:#e8e2d8;color:#635741;display:grid;place-items:center;font-weight:700;font-size:18px;overflow:hidden;border:2px solid #c9a227;flex:none}
 .avatar-preview img{width:100%;height:100%;object-fit:cover}
 .avatar-preview span{font-size:18px}
-.avatar-upload{cursor:pointer}
-.avatar-upload input{display:none}
+.avatar-upload{position:relative;overflow:hidden;cursor:pointer}
+.avatar-upload input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
 .avatar-file{font-size:9px;color:#8a938e;margin-top:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .modal-divider{height:1px;background:#edf0ed;margin:16px 0 0}
 body.dark .modal-divider{background:#2b3a33}

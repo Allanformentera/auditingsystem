@@ -33,7 +33,8 @@ const avatarUpload = multer({ storage: multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, avatarDir),
   filename: (req: SessionRequest, file, cb) => cb(null, `${req.user!.id}-${Date.now()}${path.extname(file.originalname).toLowerCase()}`),
 }), limits: { fileSize: 2 * 1024 * 1024 }, fileFilter: (_req, file, cb) => {
-  cb(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype));
+  if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) return cb(null, true);
+  cb(Object.assign(new Error('Choose a JPG, PNG, or WEBP picture.'), { status: 400 }));
 } });
 
 type SessionRequest = express.Request & { user?: { id: string; role: Role; name: string; email: string } };
@@ -220,11 +221,13 @@ app.get('/api/assessments/:id/payments', auth, async (req, res) => {
   res.json({ payments });
 });
 app.patch('/api/payments/:id/mark-paid', auth, treasurer, async (req: SessionRequest, res) => {
+  const receipt = String(req.body.reference ?? '').trim();
+  if (receipt && !/^\d{4}$/.test(receipt)) return res.status(400).json({ error: 'Receipt number must be exactly 4 digits.' });
   const payment = await prisma.$transaction(async tx => {
     const current = await tx.payment.findUnique({ where: { id: req.params.id as string }, include: { student: true, assessment: true } });
     if (!current) throw Object.assign(new Error('Payment record not found.'), { status: 404 });
     if (current.status === PaymentStatus.PAID) throw Object.assign(new Error('This student is already marked paid.'), { status: 409 });
-    const updated = await tx.payment.update({ where: { id: current.id }, data: { status: PaymentStatus.PAID, paidAt: new Date(), reference: String(req.body.reference || '') || null, recordedById: req.user!.id } });
+    const updated = await tx.payment.update({ where: { id: current.id }, data: { status: PaymentStatus.PAID, paidAt: new Date(), reference: receipt || null, recordedById: req.user!.id } });
     await tx.ledgerEntry.create({ data: { kind: LedgerKind.CREDIT, amount: current.amount, description: `${current.assessment.purpose} · ${current.student.lastName}, ${current.student.firstName}`, paymentId: current.id, createdById: req.user!.id } });
     return updated;
   });
@@ -238,6 +241,14 @@ app.patch('/api/payments/:id/mark-unpaid', auth, treasurer, async (req: SessionR
     await tx.ledgerEntry.deleteMany({ where: { paymentId: current.id } });
     return tx.payment.update({ where: { id: current.id }, data: { status: PaymentStatus.UNPAID, paidAt: null, reference: null } });
   });
+  res.json({ payment });
+});
+app.patch('/api/payments/:id/receipt', auth, treasurer, async (req, res) => {
+  const receipt = String(req.body.receipt ?? '').trim();
+  if (!/^\d{4}$/.test(receipt)) return res.status(400).json({ error: 'Receipt number must be exactly 4 digits.' });
+  const current = await prisma.payment.findUnique({ where: { id: req.params.id as string } });
+  if (!current) return res.status(404).json({ error: 'Payment record not found.' });
+  const payment = await prisma.payment.update({ where: { id: current.id }, data: { reference: receipt } });
   res.json({ payment });
 });
 
@@ -337,6 +348,10 @@ app.post('/api/audit/submissions', auth, auditor, memoryUpload.single('file'), a
 });
 app.get('/api/audit/submissions', auth, auditor, async (_req, res) => res.json({ submissions: await prisma.paymentSubmission.findMany({ orderBy: { uploadedAt: 'desc' }, include: { rows: true } }) }));
 
+app.use((error: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Attached file is too large.' });
+  next(error);
+});
 app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = error.status || 500;
   if (status === 500) console.error('API error', error.message);

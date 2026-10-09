@@ -70,6 +70,7 @@ export default function TreasurerView() {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState('');
+  const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
@@ -230,7 +231,7 @@ export default function TreasurerView() {
       };
       for (const a of inScope) await getPays(String(a.id));
       const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-      const head = ['Last Name', 'First Name', 'Course', 'Major', 'Block', 'Year Level', ...inScope.map(a => String(a.purpose).replace(/,/g, ';')), 'Total Paid', 'Total Due'];
+      const head = ['Last Name', 'First Name', 'Course', 'Major', 'Block', 'Year Level', ...inScope.flatMap(a => { const label = String(a.purpose).replace(/,/g, ';'); return [label, `${label} OR #`]; }), 'Total Paid', 'Total Due'];
       const lines = [head.map(esc).join(',')];
       let totalRows = 0;
       for (const c of deptCourses) {
@@ -247,6 +248,7 @@ export default function TreasurerView() {
             if (isPaid) paid += Number(a.amount);
             due += Number(a.amount);
             cells.push(p ? (isPaid ? 'Paid' : 'Unpaid') : 'No record');
+            cells.push(p?.reference ?? '');
           }
           if (scope === 'view' && String(student.block) !== String(block)) continue;
           cells.push(paid, due);
@@ -288,7 +290,7 @@ export default function TreasurerView() {
       setAvatarFile(null);
       if (avatarPreview) { URL.revokeObjectURL(avatarPreview); setAvatarPreview(''); }
       setShowProfile(false);
-      if (result.user.hasAvatar) await loadAvatar(apiToken);
+      await loadAvatar(apiToken);
       setNotice('Profile updated.');
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Profile could not be saved.'); }
   }
@@ -305,7 +307,8 @@ export default function TreasurerView() {
   }
   function onAvatarPick(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] || null;
-    if (file && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setNotice('Choose a JPG, PNG, or WEBP picture.'); return; }
+    if (file && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { event.currentTarget.value = ''; setNotice('Choose a JPG, PNG, or WEBP picture.'); return; }
+    if (file && file.size > 2 * 1024 * 1024) { event.currentTarget.value = ''; setNotice('Picture must be under 2 MB.'); return; }
     if (avatarPreview) URL.revokeObjectURL(avatarPreview);
     setAvatarFile(file);
     setAvatarPreview(file ? URL.createObjectURL(file) : '');
@@ -321,10 +324,23 @@ export default function TreasurerView() {
     if (!payment) { setNotice(visibleAssessments.length ? `No payment record for ${student.name} · ${assessment.purpose}.` : 'Create an assessment for this course and block before recording payments.'); return; }
     try {
       const turningPaid = payment.status !== 'PAID';
-      await apiRequest(`/api/payments/${payment.id}/${turningPaid ? 'mark-paid' : 'mark-unpaid'}`, apiToken, { method: 'PATCH', body: JSON.stringify({}) });
+      const draft = String(receiptDrafts[payment.id] ?? payment.reference ?? '').trim();
+      if (turningPaid && !/^\d{4}$/.test(draft)) { setNotice('Enter the 4-digit receipt number before marking paid.'); return; }
+      await apiRequest(`/api/payments/${payment.id}/${turningPaid ? 'mark-paid' : 'mark-unpaid'}`, apiToken, { method: 'PATCH', body: JSON.stringify(turningPaid ? { reference: draft } : {}) });
+      setReceiptDrafts(prev => { const next = { ...prev }; delete next[payment.id]; return next; });
       await refreshLiveData(apiToken);
       setNotice(`${student.name} · ${assessment.purpose} marked ${turningPaid ? 'paid. Ledger credit recorded.' : 'unpaid. Ledger credit removed.'}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Payment could not be saved.'); }
+  }
+  async function saveReceipt(paymentId: string) {
+    const draft = String(receiptDrafts[paymentId] ?? '').trim();
+    if (!/^\d{4}$/.test(draft)) { setNotice('Receipt number must be exactly 4 digits.'); return; }
+    if (!apiToken) { setNotice('Sign in to save receipt numbers.'); return; }
+    try {
+      await apiRequest(`/api/payments/${paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: draft }) });
+      await refreshLiveData(apiToken);
+      setNotice(`Receipt #${draft} saved.`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Receipt number could not be saved.'); }
   }
   function shortFee(purpose: string) { const word = purpose.trim().split(/\s+/).pop() || purpose; return word.charAt(0).toUpperCase() + word.slice(1); }
   function feeProgress(student: Student) {
@@ -335,8 +351,9 @@ export default function TreasurerView() {
   }
   function feeRows(student: Student) {
     return <div className="assess-list">{visibleAssessments.map(a => {
-      const paid = student.payments?.[a.id]?.status === 'PAID';
-      return <div className="fee-row" key={a.id}><div className="fee-info"><strong>{a.purpose}</strong><span>{money(a.amount)} · {paid ? 'Paid' : 'Unpaid'}</span></div>{!isAuditor ? <button className={`fee-btn ${paid ? 'paid' : 'unpaid'}`} aria-pressed={paid} onClick={() => togglePayment(student.id, a.id)}>{paid ? 'Paid' : 'Unpaid'}</button> : <span className={`fee-btn static ${paid ? 'paid' : 'unpaid'}`}>{paid ? 'Paid' : 'Unpaid'}</span>}</div>;
+      const payment = student.payments?.[a.id];
+      const paid = payment?.status === 'PAID';
+      return <div className="fee-row" key={a.id}><div className="fee-info"><strong>{a.purpose}</strong><span>{money(a.amount)} · {paid ? 'Paid' : 'Unpaid'}{paid && payment?.reference ? ` · OR #${payment.reference}` : ''}</span></div>{!isAuditor && payment ? <div className="fee-action"><input className="receipt-input" value={receiptDrafts[payment.id] ?? payment.reference ?? ''} onChange={e => setReceiptDrafts(prev => ({ ...prev, [payment.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="OR #" inputMode="numeric" maxLength={4} aria-label={`Receipt number for ${student.name} ${a.purpose}`} />{paid ? <button className="fee-btn receipt-save" onClick={() => saveReceipt(payment.id)}>Save</button> : null}<button className={`fee-btn ${paid ? 'paid' : 'unpaid'}`} aria-pressed={paid} onClick={() => togglePayment(student.id, a.id)}>{paid ? 'Paid' : 'Unpaid'}</button></div> : (!isAuditor ? <button className={`fee-btn ${paid ? 'paid' : 'unpaid'}`} aria-pressed={paid} onClick={() => togglePayment(student.id, a.id)}>{paid ? 'Paid' : 'Unpaid'}</button> : <span className={`fee-btn static ${paid ? 'paid' : 'unpaid'}`}>{paid ? 'Paid' : 'Unpaid'}</span>)}</div>;
     })}{visibleAssessments.length === 0 && <div className="empty-inline">No fees yet.</div>}</div>;
   }
   async function createAssessment(event: React.FormEvent) {
@@ -429,7 +446,7 @@ export default function TreasurerView() {
       <footer className="page-footer"><span>Campus Ledger <i /> CCS Finance · Academic Year 2026–2027</span><span><ShieldCheck size={14} /> Role-based access enabled</span></footer>
     </section>
 
-    {showProfile && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setShowProfile(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><div className="modal-heading"><div><span className="eyebrow">ACCOUNT</span><h2 id="profile-title">Change profile</h2></div><button className="icon-button" onClick={() => setShowProfile(false)} aria-label="Close"><X size={19} /></button></div><div className="avatar-edit"><div className="avatar-preview">{avatarPreview ? <img src={avatarPreview} alt="New picture preview" /> : avatarUrl ? <img src={avatarUrl} alt="Profile picture" /> : <span>{initials}</span>}</div><div><label className="button button-light button-small avatar-upload">Upload picture<input type="file" accept="image/jpeg,image/png,image/webp" onChange={onAvatarPick} /></label>{avatarFile && <div className="avatar-file">{avatarFile.name} will be saved with your profile.</div>}</div></div><form className="modal-form" onSubmit={saveProfile}><label>Display name (username)<input required autoFocus value={profileDraft} onChange={e => setProfileDraft(e.target.value)} placeholder="Your name" maxLength={60} /></label><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setShowProfile(false)}>Cancel</button><button className="button button-primary" type="submit">Save changes</button></div></form><div className="modal-divider" /><form className="modal-form" onSubmit={savePassword}><label>Current password<input type="password" required autoComplete="current-password" value={curPw} onChange={e => setCurPw(e.target.value)} placeholder="Enter current password" /></label><div className="form-row"><label>New password (min 12 characters)<input type="password" required autoComplete="new-password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Enter new password" /></label><label>Confirm new password<input type="password" required autoComplete="new-password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Repeat new password" /></label></div>{pwMsg && <p className="login-error" role="alert">{pwMsg}</p>}<div className="modal-actions"><span /><button className="button button-primary" type="submit">Change password</button></div></form></section></div>}
+    {showProfile && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setShowProfile(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="profile-title"><div className="modal-heading"><div><span className="eyebrow">ACCOUNT</span><h2 id="profile-title">Change profile</h2></div><button className="icon-button" onClick={() => setShowProfile(false)} aria-label="Close"><X size={19} /></button></div><div className="avatar-edit"><div className="avatar-preview">{avatarPreview ? <img src={avatarPreview} alt="New picture preview" /> : avatarUrl ? <img src={avatarUrl} alt="Profile picture" /> : <span>{initials}</span>}</div><div><label className="button button-light button-small avatar-upload">Upload picture<input key={showProfile ? 'open' : 'closed'} type="file" accept="image/jpeg,image/png,image/webp" onChange={onAvatarPick} /></label>{avatarFile && <div className="avatar-file">{avatarFile.name} will be saved with your profile.</div>}</div></div><form className="modal-form" onSubmit={saveProfile}><label>Display name (username)<input required autoFocus value={profileDraft} onChange={e => setProfileDraft(e.target.value)} placeholder="Your name" maxLength={60} /></label><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setShowProfile(false)}>Cancel</button><button className="button button-primary" type="submit">Save changes</button></div></form><div className="modal-divider" /><form className="modal-form" onSubmit={savePassword}><label>Current password<input type="password" required autoComplete="current-password" value={curPw} onChange={e => setCurPw(e.target.value)} placeholder="Enter current password" /></label><div className="form-row"><label>New password (min 12 characters)<input type="password" required autoComplete="new-password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Enter new password" /></label><label>Confirm new password<input type="password" required autoComplete="new-password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Repeat new password" /></label></div>{pwMsg && <p className="login-error" role="alert">{pwMsg}</p>}<div className="modal-actions"><span /><button className="button button-primary" type="submit">Change password</button></div></form></section></div>}
     {modal && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-heading"><div><span className="eyebrow">{modal === 'assessment' ? 'COLLECTION SETUP' : modal === 'expense' ? 'OUTGOING FUNDS' : modal === 'cash' ? 'PHYSICAL RECONCILIATION' : 'ROSTER & REPORTS'}</span><h2 id="modal-title">{modal === 'assessment' ? 'Create an assessment' : modal === 'expense' ? 'Record an expense' : modal === 'cash' ? 'Count actual cash' : 'Import a spreadsheet'}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Close"><X size={19} /></button></div>
       {modal === 'assessment' && <form className="modal-form" onSubmit={createAssessment}><label>Purpose<input required autoFocus placeholder="e.g. Pictorial" value={assessmentForm.purpose} onChange={e => setAssessmentForm({ ...assessmentForm, purpose: e.target.value })} /></label><label>Amount per student<div className="input-prefix"><span>₱</span><input required min="1" type="number" placeholder="1,850" value={assessmentForm.amount} onChange={e => setAssessmentForm({ ...assessmentForm, amount: e.target.value })} /></div></label><div className="form-row"><label>Department<select value={assessmentForm.course} onChange={e => setAssessmentForm({ ...assessmentForm, course: e.target.value, major: e.target.value === 'CAS' || e.target.value === 'EDUC' ? assessmentForm.major : '' })}>{['', ...courses].map(c => <option key={c} value={c}>{c === '' ? 'All departments' : c}</option>)}</select></label>{(assessmentForm.course === 'CAS' || assessmentForm.course === 'EDUC') && <label>Major<select value={assessmentForm.major} onChange={e => setAssessmentForm({ ...assessmentForm, major: e.target.value })}><option value="">All majors</option>{majorsFor(assessmentForm.course).map(m => <option key={m} value={m}>{m}</option>)}</select></label>}</div><div className="form-scope"><span>Year 4 · Graduating class · one payment record per active student in scope.</span></div><div className="form-row"><label>Block<select value={assessmentForm.block} onChange={e => setAssessmentForm({ ...assessmentForm, block: e.target.value })}>{Array.from({ length: 20 }, (_, i) => <option key={i + 1} value={String(i + 1)}>Block {i + 1}</option>)}<option value="">All blocks</option></select></label><label>Due date<input type="date" value={assessmentForm.due} onChange={e => setAssessmentForm({ ...assessmentForm, due: e.target.value })} /></label></div><div className="form-note"><Users size={16} /><span>This creates a payment record for every active student in the selected course and block. Already paid status starts as <b>unpaid</b>.</span></div><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" type="submit"><Plus size={16} /> Create assessment</button></div></form>}
       {modal === 'expense' && <form className="modal-form" onSubmit={addExpense}><label>Expense purpose<input required autoFocus placeholder="e.g. Venue reservation" value={expenseForm.purpose} onChange={e => setExpenseForm({ ...expenseForm, purpose: e.target.value })} /></label><div className="form-row"><label>Amount paid<div className="input-prefix"><span>₱</span><input required min="1" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({ ...expenseForm, amount: e.target.value })} /></div></label><label>Date<input type="date" required value={expenseForm.date} onChange={e => setExpenseForm({ ...expenseForm, date: e.target.value })} /></label></div><label>Vendor or paid to<input placeholder="Business or recipient" value={expenseForm.vendor} onChange={e => setExpenseForm({ ...expenseForm, vendor: e.target.value })} /></label><label className="file-drop"><ReceiptText size={19} /><span>{expenseForm.receipt || 'Attach receipt evidence'}</span><small>JPG, PNG, WEBP, or PDF · required</small><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required onChange={e => { const file = e.target.files?.[0] || null; setExpenseReceiptFile(file); setExpenseForm({ ...expenseForm, receipt: file?.name || '' }); }} /></label><div className="form-note note-amber"><ArrowDownLeft size={16} /><span>This entry will be recorded as a <b>debit</b> and reduce the book balance.</span></div><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" type="submit">Save expense</button></div></form>}
