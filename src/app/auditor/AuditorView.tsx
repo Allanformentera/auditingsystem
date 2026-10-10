@@ -72,6 +72,7 @@ export default function AuditorView() {
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState('');
   const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
+  const [editingReceipt, setEditingReceipt] = useState<string | null>(null);
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
@@ -339,9 +340,22 @@ export default function AuditorView() {
     if (!apiToken) { setNotice('Sign in to save receipt numbers.'); return; }
     try {
       await apiRequest(`/api/payments/${paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: draft }) });
+      setReceiptDrafts(prev => { const next = { ...prev }; delete next[paymentId]; return next; });
+      setEditingReceipt(null);
       await refreshLiveData(apiToken);
       setNotice(`Receipt #${draft} saved.`);
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Receipt number could not be saved.'); }
+  }
+  async function clearReceipt(paymentId: string, label: string) {
+    if (!apiToken) { setNotice('Sign in to manage receipt numbers.'); return; }
+    if (!window.confirm(`Remove the receipt number for ${label}? The payment record stays.`)) return;
+    try {
+      await apiRequest(`/api/payments/${paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: '' }) });
+      setReceiptDrafts(prev => { const next = { ...prev }; delete next[paymentId]; return next; });
+      setEditingReceipt(null);
+      await refreshLiveData(apiToken);
+      setNotice('Receipt number removed.');
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Receipt number could not be removed.'); }
   }
   async function removeStudent(student: Student) {
     if (!student.dbId || !apiToken) return;
@@ -386,11 +400,12 @@ export default function AuditorView() {
     return { total, count: paidList.length, sum, pct: total ? Math.round((paidList.length / total) * 100) : 0 };
   }
   function feeRows(student: Student) {
-    return <div className="assess-list">{visibleAssessments.map(a => {
+    return <div className="table-wrap"><table className="student-table receipt-table"><thead><tr><th>ASSESSMENT</th><th>AMOUNT</th><th>RECEIPT NO.</th><th>REMARKS</th><th>ACTIONS</th></tr></thead><tbody>{visibleAssessments.map(a => {
       const payment = student.payments?.[a.id];
       const paid = payment?.status === 'PAID';
-      return <div className="fee-row" key={a.id}><div className="fee-info"><strong>{a.purpose}</strong><span>{money(a.amount)} · {paid ? 'Paid' : 'Unpaid'}{paid && payment?.reference ? ` · OR #${payment.reference}` : ''}</span></div>{payment ? <div className="fee-action"><input className="receipt-input" value={receiptDrafts[payment.id] ?? payment.reference ?? ''} onChange={e => setReceiptDrafts(prev => ({ ...prev, [payment.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="OR #" inputMode="numeric" maxLength={4} aria-label={`Receipt number for ${student.name} ${a.purpose}`} /><button className="fee-btn receipt-save" onClick={() => saveReceipt(payment.id)}>Save</button><span className={`fee-btn static ${paid ? 'paid' : 'unpaid'}`}>{paid ? 'Paid' : 'Unpaid'}</span></div> : <span className={`fee-btn static ${paid ? 'paid' : 'unpaid'}`}>{paid ? 'Paid' : 'Unpaid'}</span>}</div>;
-    })}{visibleAssessments.length === 0 && <div className="empty-inline">No fees yet.</div>}</div>;
+      const editing = !!payment && editingReceipt === payment.id;
+      return <tr key={a.id}><td><strong>{a.purpose}</strong></td><td>{money(a.amount)}</td><td>{!payment ? <span className="muted">No record</span> : editing ? <input className="receipt-input" value={receiptDrafts[payment.id] ?? payment.reference ?? ''} onChange={e => setReceiptDrafts(prev => ({ ...prev, [payment.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="OR #" inputMode="numeric" maxLength={4} autoFocus aria-label={`Receipt number for ${student.name} ${a.purpose}`} /> : payment.reference ? `OR #${payment.reference}` : <span className="muted"> · </span>}</td><td><span className={`status-badge ${paid ? 'paid' : 'unpaid'}`}><i />{!payment ? 'No record' : paid ? 'Paid' : 'Unpaid'}</span></td><td>{!payment ? null : editing ? <div className="receipt-actions"><button className="button button-primary button-small" onClick={() => saveReceipt(payment.id)}>Save</button><button className="button button-light button-small" onClick={() => { setEditingReceipt(null); setReceiptDrafts(prev => { const next = { ...prev }; delete next[payment.id]; return next; }); }}>Cancel</button></div> : <div className="receipt-actions"><button className="button button-light button-small" onClick={() => setEditingReceipt(payment.id)}>Edit</button>{payment.reference ? <button className="button button-light button-small button-danger" onClick={() => clearReceipt(payment.id, `${student.name} · ${a.purpose}`)}>Delete</button> : null}</div>}</td></tr>;
+    })}</tbody></table>{visibleAssessments.length === 0 && <div className="empty-inline">No fees yet.</div>}</div>;
   }
   async function createAssessment(event: React.FormEvent) {
     event.preventDefault();

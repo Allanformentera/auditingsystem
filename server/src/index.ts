@@ -307,10 +307,10 @@ app.patch('/api/payments/:id/mark-unpaid', auth, treasurer, async (req: SessionR
 });
 app.patch('/api/payments/:id/receipt', auth, auditor, async (req, res) => {
   const receipt = String(req.body.receipt ?? '').trim();
-  if (!/^\d{4}$/.test(receipt)) return res.status(400).json({ error: 'Receipt number must be exactly 4 digits.' });
+  if (receipt && !/^\d{4}$/.test(receipt)) return res.status(400).json({ error: 'Receipt number must be exactly 4 digits.' });
   const current = await prisma.payment.findUnique({ where: { id: req.params.id as string } });
   if (!current) return res.status(404).json({ error: 'Payment record not found.' });
-  const payment = await prisma.payment.update({ where: { id: current.id }, data: { reference: receipt } });
+  const payment = await prisma.payment.update({ where: { id: current.id }, data: { reference: receipt || null } });
   res.json({ payment });
 });
 
