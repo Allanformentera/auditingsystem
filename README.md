@@ -93,6 +93,6 @@ Receipt files are stored in `server/uploads` for local development and served on
 
 ## API roles
 
-- `TREASURER`: roster and payment management, assessment creation, expense recording.
-- `AUDITOR`: ledger review, physical cash counts, and representative payment-list reconciliation.
+- `TREASURER`: assessment creation, mark paid/unpaid, expense recording, and viewing the roster with receipt numbers.
+- `AUDITOR`: roster import, receipt number entry, ledger review, physical cash counts, and representative payment-list reconciliation.
 - `ADMIN`: account provisioning and system setup.

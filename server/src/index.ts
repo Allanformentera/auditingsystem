@@ -108,7 +108,7 @@ app.get('/api/students', auth, async (req, res) => {
   }, orderBy: [{ course: 'asc' }, { block: 'asc' }, { lastName: 'asc' }, { firstName: 'asc' }] });
   res.json({ students, count: students.length });
 });
-app.post('/api/students/import', auth, treasurer, memoryUpload.single('file'), async (req, res) => {
+app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Choose an Excel workbook first.' });
   const course = String(req.body.course || 'BSIT').toUpperCase();
   const yearLevel = Number(req.body.yearLevel || 4);
@@ -243,7 +243,7 @@ app.patch('/api/payments/:id/mark-unpaid', auth, treasurer, async (req: SessionR
   });
   res.json({ payment });
 });
-app.patch('/api/payments/:id/receipt', auth, treasurer, async (req, res) => {
+app.patch('/api/payments/:id/receipt', auth, auditor, async (req, res) => {
   const receipt = String(req.body.receipt ?? '').trim();
   if (!/^\d{4}$/.test(receipt)) return res.status(400).json({ error: 'Receipt number must be exactly 4 digits.' });
   const current = await prisma.payment.findUnique({ where: { id: req.params.id as string } });
