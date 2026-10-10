@@ -50,6 +50,7 @@ const allow = (...roles: Role[]) => (req: SessionRequest, res: express.Response,
 };
 const treasurer = allow(Role.TREASURER, Role.ADMIN);
 const auditor = allow(Role.AUDITOR, Role.ADMIN);
+const staff = allow(Role.TREASURER, Role.AUDITOR, Role.ADMIN);
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.post('/api/auth/login', async (req, res) => {
@@ -215,6 +216,51 @@ app.delete('/api/students/:id', auth, auditor, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/students', auth, staff, async (req, res) => {
+  const course = String(req.body.course || '').toUpperCase();
+  const yearLevel = Number(req.body.yearLevel || 4);
+  const firstName = String(req.body.firstName || '').trim();
+  const lastName = String(req.body.lastName || '').trim();
+  const block = String(req.body.block || '').trim().replace(/^(?:block|blk)\s*/i, '');
+  const studentNo = String(req.body.studentNo || '').trim() || undefined;
+  if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the first and last name.' });
+  if (!['BSIT', 'EDUC', 'BSOA', 'CRIM', 'CAS'].includes(course)) return res.status(400).json({ error: 'Choose one of the five supported courses.' });
+  const major = String(req.body.major || '').toUpperCase();
+  const courseMajors: Record<string, string[]> = { CAS: ['BA COMM', 'POLSCI'], EDUC: ['BSED', 'BEED'] };
+  if ((course === 'CAS' || course === 'EDUC') && !(courseMajors[course] || []).includes(major)) return res.status(400).json({ error: `Choose a ${course} major (${(courseMajors[course] || []).join(' or ')}).` });
+  if (!block) return res.status(400).json({ error: 'Choose a block.' });
+  if (!Number.isInteger(yearLevel) || yearLevel < 1 || yearLevel > 6) return res.status(400).json({ error: 'Choose a valid year level.' });
+  const majorValue = course === 'CAS' || course === 'EDUC' ? major : '';
+  if (studentNo) {
+    const taken = await prisma.student.findUnique({ where: { studentNo } });
+    if (taken && taken.active) return res.status(409).json({ error: 'That student number is already on the roster.' });
+  }
+  let student = await prisma.student.findFirst({ where: { course, yearLevel, block, major: majorValue, firstName, lastName } });
+  let restored = false;
+  if (student && !student.active) {
+    student = await prisma.student.update({ where: { id: student.id }, data: { active: true, ...(studentNo ? { studentNo } : {}) } });
+    restored = true;
+  }
+  if (!student) {
+    try {
+      student = await prisma.student.create({ data: { ...(studentNo ? { studentNo } : {}), firstName, lastName, block, course, major: majorValue, yearLevel } });
+    } catch {
+      return res.status(409).json({ error: 'This student is already on the roster.' });
+    }
+  }
+  const matching = await prisma.assessment.findMany({ where: { AND: [
+    { OR: [{ course: null }, { course }] },
+    { OR: [{ yearLevel: null }, { yearLevel }] },
+    { OR: [{ major: '' }, { major: majorValue }] },
+  ] } });
+  let enrolled = 0;
+  for (const a of matching) {
+    if (a.block && a.block !== student.block) continue;
+    const r = await prisma.payment.createMany({ data: [{ studentId: student.id, assessmentId: a.id, amount: a.amount }], skipDuplicates: true });
+    enrolled += r.count;
+  }
+  res.status(restored ? 200 : 201).json({ student, enrolled, restored });
+});
 app.get('/api/assessments', auth, async (_req, res) => {
   const assessments = await prisma.assessment.findMany({ orderBy: { createdAt: 'desc' }, include: { _count: { select: { payments: true } }, payments: { select: { status: true, amount: true } } } });
   res.json({ assessments: assessments.map(a => ({ id: a.id, purpose: a.purpose, amount: a.amount, course: a.course, major: a.major, yearLevel: a.yearLevel, block: a.block, dueDate: a.dueDate, createdAt: a.createdAt, studentCount: a._count.payments, paidCount: a.payments.filter(p => p.status === PaymentStatus.PAID).length })) });
