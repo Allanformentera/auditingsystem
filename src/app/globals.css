@@ -115,6 +115,7 @@ body.dark .row-delete{background:#2a1f1e;border-color:#5a3632;color:#e89a95}
 body.dark .button-danger{color:#e89a95;border-color:#5a3632}
 .receipt-table td{vertical-align:middle}
 .receipt-actions{display:flex;gap:6px;flex-wrap:wrap}
+.progress-static{display:grid;gap:4px;font-size:10px}
 body.dark .assess-drop td{background:#141e1a}
 body.dark .fee-row{background:#1a2621;border-color:#2b3a33}
 body.dark .fee-info strong{color:#e8ece9}
