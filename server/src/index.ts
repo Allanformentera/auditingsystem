@@ -180,12 +180,13 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
   const inserted = { added, skipped: records.length - added };
   const importBlock = String(req.body.block || '').trim();
   const importMajor = course === 'CAS' || course === 'EDUC' ? String(req.body.major || '').toUpperCase() : '';
+  const fileBlocks = [...new Set(records.map(r => r.block))];
+  const restored = await prisma.student.updateMany({ where: { active: false, course, yearLevel, major: importMajor, ...(fileBlocks.length ? { block: { in: fileBlocks } } : {}) }, data: { active: true } });
   const matching = await prisma.assessment.findMany({ where: { AND: [
     { OR: [{ course: null }, { course }] },
     { OR: [{ yearLevel: null }, { yearLevel }] },
     { OR: [{ major: '' }, { major: importMajor }] },
   ] } });
-  const fileBlocks = [...new Set(records.map(r => r.block))];
   let enrolled = 0;
   for (const a of matching) {
     const scope: { course: string; yearLevel: number; major?: string; block?: string | { in: string[] } } = { course, yearLevel };
@@ -196,7 +197,22 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
     const r = await prisma.payment.createMany({ data: roster.map(s => ({ studentId: s.id, assessmentId: a.id, amount: a.amount })), skipDuplicates: true });
     enrolled += r.count;
   }
-  res.json({ ...inserted, enrolled, invalidRows: invalid, parsed: records.length, sheets: workbook.SheetNames });
+  res.json({ ...inserted, restored: restored.count, enrolled, invalidRows: invalid, parsed: records.length, sheets: workbook.SheetNames });
+});
+app.delete('/api/students', auth, auditor, async (req, res) => {
+  const course = String(req.query.course || '').toUpperCase();
+  const block = String(req.query.block || '').trim();
+  const yearLevel = Number(req.query.yearLevel || 4);
+  const major = String(req.query.major || '').toUpperCase();
+  if (!course || !block) return res.status(400).json({ error: 'Choose a course and block first.' });
+  const result = await prisma.student.updateMany({ where: { active: true, course, block, yearLevel, ...(major ? { major } : {}) }, data: { active: false } });
+  res.json({ removed: result.count });
+});
+app.delete('/api/students/:id', auth, auditor, async (req, res) => {
+  const student = await prisma.student.findFirst({ where: { id: req.params.id as string, active: true } });
+  if (!student) return res.status(404).json({ error: 'Student not found.' });
+  await prisma.student.update({ where: { id: student.id }, data: { active: false } });
+  res.json({ ok: true });
 });
 
 app.get('/api/assessments', auth, async (_req, res) => {
