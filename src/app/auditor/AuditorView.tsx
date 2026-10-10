@@ -44,6 +44,7 @@ export default function AuditorView() {
   const [yearLevel] = useState('4');
   const [block, setBlock] = useState('4');
   const [filter, setFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
+  const [sortAZ, setSortAZ] = useState<'az' | 'za'>('az');
   const [query, setQuery] = useState('');
   const [students, setStudents] = useState(seedStudents);
   const [assessments, setAssessments] = useState([initialAssessment]);
@@ -70,8 +71,11 @@ export default function AuditorView() {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState('');
-  const [receiptDrafts, setReceiptDrafts] = useState<Record<string, string>>({});
-  const [editingReceipt, setEditingReceipt] = useState<string | null>(null);
+  const [recordModal, setRecordModal] = useState<{ paymentId: string | null; studentDbId: string | null; assessmentId: string } | null>(null);
+  const [recFirst, setRecFirst] = useState('');
+  const [recLast, setRecLast] = useState('');
+  const [recPurpose, setRecPurpose] = useState('');
+  const [recReceipt, setRecReceipt] = useState('');
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
@@ -92,7 +96,11 @@ export default function AuditorView() {
 
   const isAuditor = dashboardRole === 'AUDITOR';
   const activeMajor = (course === 'CAS' || course === 'EDUC') ? major : '';
-  const visibleStudents = useMemo(() => students.filter(s => s.course === course && s.yearLevel === Number(yearLevel) && s.block === block && (filter === 'all' || s.status === filter) && s.name.toLowerCase().includes(query.toLowerCase())), [students, course, yearLevel, block, filter, query]);
+  const visibleStudents = useMemo(() => {
+    const list = students.filter(s => s.course === course && s.yearLevel === Number(yearLevel) && s.block === block && (filter === 'all' || s.status === filter) && s.name.toLowerCase().includes(query.toLowerCase()));
+    if (sortAZ === 'za') list.reverse();
+    return list;
+  }, [students, course, yearLevel, block, filter, query, sortAZ]);
   const selectedStudents = students.filter(s => s.course === course && s.yearLevel === Number(yearLevel) && s.block === block);
   const visibleAssessments = assessments.filter(a => (!a.course || a.course === course) && a.yearLevel === Number(yearLevel) && (!a.block || a.block === block) && ((a.major || '') === '' || activeMajor === '' || (a.major || '') === activeMajor));
   const feeTotal = visibleAssessments.reduce((n, a) => n + a.amount, 0);
@@ -325,33 +333,62 @@ export default function AuditorView() {
     if (!payment) { setNotice(visibleAssessments.length ? `No payment record for ${student.name} · ${assessment.purpose}.` : 'Create an assessment for this course and block before recording payments.'); return; }
     try {
       const turningPaid = payment.status !== 'PAID';
-      const draft = String(receiptDrafts[payment.id] ?? payment.reference ?? '').trim();
-      if (turningPaid && !/^\d{4}$/.test(draft)) { setNotice('Enter the 4-digit receipt number before marking paid.'); return; }
-      await apiRequest(`/api/payments/${payment.id}/${turningPaid ? 'mark-paid' : 'mark-unpaid'}`, apiToken, { method: 'PATCH', body: JSON.stringify(turningPaid ? { reference: draft } : {}) });
-      setReceiptDrafts(prev => { const next = { ...prev }; delete next[payment.id]; return next; });
+      await apiRequest(`/api/payments/${payment.id}/${turningPaid ? 'mark-paid' : 'mark-unpaid'}`, apiToken, { method: 'PATCH', body: JSON.stringify({}) });
       await refreshLiveData(apiToken);
       setNotice(`${student.name} · ${assessment.purpose} marked ${turningPaid ? 'paid. Ledger credit recorded.' : 'unpaid. Ledger credit removed.'}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Payment could not be saved.'); }
   }
-  async function saveReceipt(paymentId: string) {
-    const draft = String(receiptDrafts[paymentId] ?? '').trim();
-    if (!/^\d{4}$/.test(draft)) { setNotice('Receipt number must be exactly 4 digits.'); return; }
-    if (!apiToken) { setNotice('Sign in to save receipt numbers.'); return; }
+  function openRecord(student: Student, a: { id: number | string; purpose: string }, payment: any) {
+    const parts = String(student.name || '').split(',');
+    setRecLast((parts[0] || '').trim());
+    setRecFirst((parts[1] || '').trim());
+    setRecPurpose(String(a.purpose || ''));
+    setRecReceipt(String(payment?.reference ?? ''));
+    setRecordModal({ paymentId: payment?.id ?? null, studentDbId: student.dbId ?? null, assessmentId: String(a.id) });
+  }
+  async function saveRecordName() {
+    if (!recordModal?.studentDbId || !apiToken) { setNotice('Sign in to edit names.'); return; }
+    if (!recFirst.trim() || !recLast.trim()) { setNotice('Enter the first and last name.'); return; }
     try {
-      await apiRequest(`/api/payments/${paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: draft }) });
-      setReceiptDrafts(prev => { const next = { ...prev }; delete next[paymentId]; return next; });
-      setEditingReceipt(null);
+      await apiRequest('/api/students/' + recordModal.studentDbId, apiToken, { method: 'PATCH', body: JSON.stringify({ firstName: recFirst.trim(), lastName: recLast.trim() }) });
       await refreshLiveData(apiToken);
-      setNotice(`Receipt #${draft} saved.`);
+      setNotice('Student name updated.');
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Name could not be updated.'); }
+  }
+  async function saveRecordPurpose() {
+    if (!recordModal || !apiToken) { setNotice('Sign in to edit assessments.'); return; }
+    if (recPurpose.trim().length < 2) { setNotice('Enter an assessment name of at least 2 characters.'); return; }
+    try {
+      await apiRequest('/api/assessments/' + recordModal.assessmentId, apiToken, { method: 'PATCH', body: JSON.stringify({ purpose: recPurpose.trim() }) });
+      await refreshLiveData(apiToken);
+      setNotice('Assessment name updated.');
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Assessment could not be updated.'); }
+  }
+  async function deleteRecordAssessment(purpose: string) {
+    if (!recordModal || !apiToken) { setNotice('Sign in to manage assessments.'); return; }
+    if (!window.confirm(`Delete assessment "${purpose}"? Its payment records and ledger entries will be removed.`)) return;
+    try {
+      const result = await apiRequest<{ removedPayments: number }>('/api/assessments/' + recordModal.assessmentId, apiToken, { method: 'DELETE' });
+      setRecordModal(null);
+      await refreshLiveData(apiToken);
+      setNotice(`Assessment deleted · ${result.removedPayments} payment records removed.`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Assessment could not be deleted.'); }
+  }
+  async function saveModalReceipt() {
+    if (!recordModal?.paymentId || !apiToken) { setNotice('Sign in to save receipt numbers.'); return; }
+    if (!/^\d{4}$/.test(recReceipt.trim())) { setNotice('Receipt number must be exactly 4 digits.'); return; }
+    try {
+      await apiRequest(`/api/payments/${recordModal.paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: recReceipt.trim() }) });
+      await refreshLiveData(apiToken);
+      setNotice(`Receipt #${recReceipt.trim()} saved.`);
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Receipt number could not be saved.'); }
   }
-  async function clearReceipt(paymentId: string, label: string) {
-    if (!apiToken) { setNotice('Sign in to manage receipt numbers.'); return; }
+  async function removeModalReceipt(label: string) {
+    if (!recordModal?.paymentId || !apiToken) { setNotice('Sign in to manage receipt numbers.'); return; }
     if (!window.confirm(`Remove the receipt number for ${label}? The payment record stays.`)) return;
     try {
-      await apiRequest(`/api/payments/${paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: '' }) });
-      setReceiptDrafts(prev => { const next = { ...prev }; delete next[paymentId]; return next; });
-      setEditingReceipt(null);
+      await apiRequest(`/api/payments/${recordModal.paymentId}/receipt`, apiToken, { method: 'PATCH', body: JSON.stringify({ receipt: '' }) });
+      setRecReceipt('');
       await refreshLiveData(apiToken);
       setNotice('Receipt number removed.');
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Receipt number could not be removed.'); }
@@ -402,8 +439,7 @@ export default function AuditorView() {
     return visibleAssessments.map(a => {
       const payment = student.payments?.[a.id];
       const paid = payment?.status === 'PAID';
-      const editing = !!payment && editingReceipt === payment.id;
-      return <tr key={`${student.id}:${a.id}`}><td><div className="student-cell"><div className="student-avatar">{student.name.split(/[ ,]+/).map(n => n[0]).slice(0, 2).join('')}</div><div><strong>{student.name}</strong><span>CCS · Year {student.yearLevel}</span></div></div>{apiToken && student.dbId ? <button className="row-delete" onClick={() => removeStudent(student)}><Trash2 size={15} /></button> : null}</td><td><span className="course-block">{student.course}</span><span className="block-muted">Block {student.block}</span></td><td>{(() => { const p = feeProgress(student); return <span className="progress-static"><span>{p.count}/{p.total} paid · {money(p.sum)}</span><span className="progress-track"><span className="progress-fill blue-fill" style={{ width: `${p.pct}%` }} /></span></span>; })()}</td><td><strong>{a.purpose}</strong></td><td>{money(a.amount)}</td><td>{!payment ? <span className="muted">No record</span> : editing ? <input className="receipt-input" value={receiptDrafts[payment.id] ?? payment.reference ?? ''} onChange={e => setReceiptDrafts(prev => ({ ...prev, [payment.id]: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="OR #" inputMode="numeric" maxLength={4} autoFocus aria-label={`Receipt number for ${student.name} ${a.purpose}`} /> : payment.reference ? `OR #${payment.reference}` : <span className="muted"> · </span>}</td><td><span className={`status-badge ${paid ? 'paid' : 'unpaid'}`}><i />{!payment ? 'No record' : paid ? 'Paid' : 'Unpaid'}</span></td><td>{!payment ? null : editing ? <div className="receipt-actions"><button className="button button-primary button-small" onClick={() => saveReceipt(payment.id)}>Save</button><button className="button button-light button-small" onClick={() => { setEditingReceipt(null); setReceiptDrafts(prev => { const next = { ...prev }; delete next[payment.id]; return next; }); }}>Cancel</button></div> : <div className="receipt-actions"><button className="button button-light button-small" onClick={() => setEditingReceipt(payment.id)}>Edit</button>{payment.reference ? <button className="button button-light button-small button-danger" onClick={() => clearReceipt(payment.id, `${student.name} · ${a.purpose}`)}>Delete</button> : null}</div>}</td></tr>;
+      return <tr key={`${student.id}:${a.id}`}><td><div className="student-cell"><div className="student-avatar">{student.name.split(/[ ,]+/).map(n => n[0]).slice(0, 2).join('')}</div><div><strong>{student.name}</strong><span>CCS · Year {student.yearLevel}</span></div></div></td><td><span className="course-block">{student.course}</span><span className="block-muted">Block {student.block}</span></td><td>{(() => { const p = feeProgress(student); return <span className="progress-static"><span>{p.count}/{p.total} paid · {money(p.sum)}</span><span className="progress-track"><span className="progress-fill blue-fill" style={{ width: `${p.pct}%` }} /></span></span>; })()}</td><td><strong>{a.purpose}</strong></td><td>{money(a.amount)}</td><td>{!payment ? <span className="muted">No record</span> : payment.reference ? `OR #${payment.reference}` : <span className="muted"> · </span>}</td><td><span className={`status-badge ${paid ? 'paid' : 'unpaid'}`}><i />{!payment ? 'No record' : paid ? 'Paid' : 'Unpaid'}</span></td><td><div className="receipt-actions"><button className="button button-light button-small" onClick={() => openRecord(student, a, payment)}>Edit</button>{apiToken && student.dbId ? <button className="button button-light button-small button-danger" onClick={() => removeStudent(student)} aria-label={`Remove ${student.name} from roster`}><Trash2 size={14} /></button> : null}</div></td></tr>;
     })
   }
   async function createAssessment(event: React.FormEvent) {
@@ -487,7 +523,7 @@ export default function AuditorView() {
           {isAuditor && <section className="panel audit-shortcut"><div className="audit-shortcut-copy"><div className="audit-shortcut-icon"><ShieldCheck size={19} /></div><div><strong>Ready to reconcile?</strong><span>Compare the ledger balance to physical cash and review submitted payment lists.</span></div></div><div className="shortcut-actions"><button className="button button-light" onClick={() => setModal('cash')}><Wallet size={16} /> Count actual cash</button><button className="button button-primary" onClick={() => setPage('Payment lists')}><FileCheck2 size={16} /> Review payment lists</button></div></section>}
         </>}
 
-        {page === 'Collections' && <section className="panel full-panel"><div className="panel-heading"><div><h2>{isAuditor ? 'Payment records' : 'Collections by student'}</h2><p>Filter by block and payment status. Course is chosen in the workspace.</p></div><div className="heading-actions compact"><div className="topbar-menu"><button className="button button-light button-small" onClick={() => setExportOpen(v => !v)} aria-expanded={exportOpen} aria-label="Export list"><Download size={14} /> Export CSV</button>{exportOpen && <div className="menu-dropdown export-dropdown"><button className="menu-item" onClick={() => exportCSV('view')}>This block · {course} Block {block}</button><button className="menu-item" onClick={() => exportCSV('department')}>Whole department · {course} all blocks</button><button className="menu-item" onClick={() => exportCSV('all')}>All departments · Year 4</button></div>}</div><span className="course-chip"><img src={courseLogos[course]} alt="" className="chip-logo" />{course}{(course === 'CAS' || course === 'EDUC') && major ? ` · ${major}` : ''} · Year 4</span><label className="select-wrap"><select aria-label="Block" value={block} onChange={e => setBlock(e.target.value)}>{Array.from({ length: 20 }, (_, i) => <option key={i + 1} value={String(i + 1)}>Block {i + 1}</option>)}</select><ChevronDown size={14} /></label></div></div><div className="filters-row full-filters"><div className="course-pills">{(['all', 'unpaid', 'paid'] as const).map(f => <button key={f} className={`course-pill ${filter === f ? 'course-active' : ''}`} onClick={() => setFilter(f)}>{f === 'all' ? 'All students' : f[0].toUpperCase() + f.slice(1)}</button>)}</div>{apiToken ? <button className="button button-light button-small button-danger" onClick={removeBlock}><Trash2 size={14} /> Remove block</button> : null}<label className="search-wrap"><Search size={15} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search names" /></label></div>{course === 'BSIT' || (apiToken && students.length > 0) ? <div className="table-wrap"><table className="student-table"><thead><tr><th>STUDENT</th><th>COURSE & BLOCK</th><th>PAYMENT PROGRESS</th><th>ASSESSMENT</th><th>AMOUNT</th><th>RECEIPT NO.</th><th>REMARKS</th><th>ACTION</th></tr></thead><tbody>{visibleStudents.flatMap(s => flatRows(s))}{visibleAssessments.length > 0 ? null : <tr><td colSpan={8}><div className="empty-inline">No fees yet.</div></td></tr>}</tbody></table></div> : <div className="empty-state">No {course} student list has been imported yet. Import the roster when your course list arrives.</div>}</section>}
+        {page === 'Collections' && <section className="panel full-panel"><div className="panel-heading"><div><h2>{isAuditor ? 'Payment records' : 'Collections by student'}</h2><p>Filter by block and payment status. Course is chosen in the workspace.</p></div><div className="heading-actions compact"><div className="topbar-menu"><button className="button button-light button-small" onClick={() => setExportOpen(v => !v)} aria-expanded={exportOpen} aria-label="Export list"><Download size={14} /> Export CSV</button>{exportOpen && <div className="menu-dropdown export-dropdown"><button className="menu-item" onClick={() => exportCSV('view')}>This block · {course} Block {block}</button><button className="menu-item" onClick={() => exportCSV('department')}>Whole department · {course} all blocks</button><button className="menu-item" onClick={() => exportCSV('all')}>All departments · Year 4</button></div>}</div><span className="course-chip"><img src={courseLogos[course]} alt="" className="chip-logo" />{course}{(course === 'CAS' || course === 'EDUC') && major ? ` · ${major}` : ''} · Year 4</span><label className="select-wrap"><select aria-label="Block" value={block} onChange={e => setBlock(e.target.value)}>{Array.from({ length: 20 }, (_, i) => <option key={i + 1} value={String(i + 1)}>Block {i + 1}</option>)}</select><ChevronDown size={14} /></label></div></div><div className="filters-row full-filters"><div className="course-pills">{(['all', 'unpaid', 'paid'] as const).map(f => <button key={f} className={`course-pill ${filter === f ? 'course-active' : ''}`} onClick={() => setFilter(f)}>{f === 'all' ? 'All students' : f[0].toUpperCase() + f.slice(1)}</button>)}</div>{apiToken ? <button className="button button-light button-small button-danger" onClick={removeBlock}><Trash2 size={14} /> Remove block</button> : null}<button className="button button-light button-small" onClick={() => setSortAZ(v => (v === 'az' ? 'za' : 'az'))} title="Sort names">{sortAZ === 'az' ? 'A-Z' : 'Z-A'}</button><label className="search-wrap"><Search size={15} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search names" /></label></div>{course === 'BSIT' || (apiToken && students.length > 0) ? <div className="table-wrap"><table className="student-table"><thead><tr><th>STUDENT</th><th>COURSE & BLOCK</th><th>PAYMENT PROGRESS</th><th>ASSESSMENT</th><th>AMOUNT</th><th>RECEIPT NO.</th><th>REMARKS</th><th>ACTION</th></tr></thead><tbody>{visibleStudents.flatMap(s => flatRows(s))}{visibleAssessments.length > 0 ? null : <tr><td colSpan={8}><div className="empty-inline">No fees yet.</div></td></tr>}</tbody></table></div> : <div className="empty-state">No {course} student list has been imported yet. Import the roster when your course list arrives.</div>}</section>}
         {page === 'Assessments' && <section className="panel full-panel"><div className="panel-heading"><div><h2>Assessments</h2><p>Every assessment automatically creates one student payment record per roster entry.</p></div>{!isAuditor && <button className="button button-primary" onClick={() => { setAssessmentForm(f => ({ ...f, course, yearLevel: '4', major: (course === 'CAS' || course === 'EDUC') ? major : '' })); setModal('assessment'); }}><Plus size={17} /> New assessment</button>}</div><div className="assessment-cards">{assessments.map(a => <article className="assessment-card" key={a.id}><div className="assessment-card-head"><div className="assessment-symbol"><ClipboardCheck size={17} /></div><span className="live-pill"><i /> ACTIVE</span></div><h3>{a.purpose}</h3><div className="assessment-card-amount">{money(a.amount)} <span>per student</span></div><div className="assessment-card-meta">{a.course || 'All departments'}{a.major ? ` · ${a.major}` : ''} · {a.block ? `Block ${a.block}` : 'All blocks'} · {a.students} students · Due {a.due}</div><div className="assessment-progress"><div className="assessment-track"><div style={{ width: '70%' }} /></div><span>28 / 40 paid</span></div></article>)}</div></section>}
         {(page === 'Expenses' || page === 'Expenses & receipts') && <section className="panel full-panel"><div className="panel-heading"><div><h2>{isAuditor ? 'Expenses & receipt review' : 'Expense records'}</h2><p>Every debit is linked to its receipt evidence.</p></div>{!isAuditor && <button className="button button-primary" onClick={() => setModal('expense')}><Plus size={17} /> Record expense</button>}</div><div className="expense-totals"><div><span>Total documented expenses</span><strong>{money(expensesTotal)}</strong></div><span className="status-badge paid"><i /> {expenses.length} receipts attached</span></div><div className="expense-list">{expenses.map(e => <div className="expense-row" key={e.id}><div className="receipt-thumb"><ReceiptText size={19} /></div><div className="expense-copy"><strong>{e.purpose}</strong><span>{e.vendor} · {e.date}</span></div><strong className="expense-amount">− {money(e.amount)}</strong><button className="button button-light button-small" onClick={() => openReceipt(e.id, e.receipt)}><FileCheck2 size={15} /> View receipt</button></div>)}</div></section>}
         {page === 'Audit trail' && <section className="panel full-panel"><div className="panel-heading"><div><h2>Ledger activity</h2><p>Chronological record of every credit and debit.</p></div><span className="count-chip">{apiToken ? liveRecent.length : students.filter(s => s.status === 'paid').length + expenses.length} latest entries</span></div><div className="audit-summary-strip"><div><span>Credits</span><strong className="text-credit">{money(collected)}</strong></div><div><span>Debits</span><strong className="text-debit">− {money(expensesTotal)}</strong></div><div><span>Book balance</span><strong>{money(balance)}</strong></div></div><div className="activity-list activity-full">{apiToken ? <RecentEntries entries={liveRecent} /> : <><ActivityRow kind="credit" title="Payment received · Pictorial" subtitle="Agot, Azeel · Block 4 · Treasurer: Jordan D." amount="+ ₱1,850" time="Today, 9:42 AM" /><ActivityRow kind="debit" title="Venue reservation" subtitle="CCS Activity Center · Receipt attached" amount="− ₱3,500" time="Sep 29, 2026" /><ActivityRow kind="credit" title="Payment received · Pictorial" subtitle="Bermoy, Ina Marie · Block 4 · Treasurer: Jordan D." amount="+ ₱1,850" time="Sep 29, 2026" /></>}</div></section>}
@@ -504,6 +540,7 @@ export default function AuditorView() {
       {modal === 'cash' && <form className="modal-form" onSubmit={saveCashCount}><div className="cash-compare"><span>Current book balance</span><strong>{money(balance)}</strong><small>Credits minus documented expenses</small></div><label>Physical cash counted<input required autoFocus min="0" type="number" placeholder="0.00" value={actualCash} onChange={e => setActualCash(e.target.value)} /></label>{actualCash && <div className={`variance ${Number(actualCash) === balance ? 'variance-even' : 'variance-gap'}`}><Activity size={16} /><span>Variance</span><strong>{money(Number(actualCash) - balance)}</strong></div>}<label>Audit note <textarea value={auditNote} onChange={e => setAuditNote(e.target.value)} placeholder="Count date, witnesses, or explanation for a difference" rows={3} /></label><div className="form-note"><ShieldCheck size={16} /><span>The cash count will be saved to the audit history with your account and timestamp.</span></div><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" type="submit">Save cash count</button></div></form>}
       {modal === 'import' && <form className="modal-form" onSubmit={submitImport}><label>Import type<select value={importKind} onChange={e => setImportKind(e.target.value as 'roster' | 'payment-list')}><option value="roster">Student roster</option><option value="payment-list">Mayor / representative payment list</option></select></label><div className="form-scope"><img src={courseLogos[course]} alt="" className="chip-logo" /><span>For <b>{course}{(course === 'CAS' || course === 'EDUC') && major ? ` · ${major}` : ''} · Year 4</b> · change course / major from the workspace.</span></div>{importKind === 'roster' && <div className="form-row"><label>Default block (used when the file has none)<select value={importBlock} onChange={e => setImportBlock(e.target.value)}>{Array.from({ length: 20 }, (_, i) => <option key={i + 1} value={String(i + 1)}>Block {i + 1}</option>)}</select></label></div>}<label className="file-drop"><FileSpreadsheet size={20} /><span>{importFile || 'Choose an Excel or CSV file'}</span><small>.xlsx, .xls, or .csv</small><input type="file" accept=".xlsx,.xls,.csv" required onChange={e => { const file = e.target.files?.[0] || null; setImportUpload(file); setImportFile(file?.name || ''); }} /></label><div className="form-note"><BadgeCheck size={16} /><span>Duplicate students are skipped. Payment lists are compared with roster and ledger records.</span></div><div className="modal-actions"><button type="button" className="button button-light" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" type="submit">Continue import</button></div></form>}
     </section></div>}
+    {recordModal && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setRecordModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="record-title"><div className="modal-heading"><div><span className="eyebrow">RECORD</span><h2 id="record-title">Edit record</h2></div><button className="icon-button" onClick={() => setRecordModal(null)} aria-label="Close"><X size={19} /></button></div><div className="modal-form"><div className="form-row"><label>First name<input value={recFirst} onChange={e => setRecFirst(e.target.value)} placeholder="First name" maxLength={100} /></label><label>Last name<input value={recLast} onChange={e => setRecLast(e.target.value)} placeholder="Last name" maxLength={100} /></label></div><div className="modal-actions"><button type="button" className="button button-light button-small" onClick={saveRecordName}>Save name</button></div><div className="modal-divider" /><label>Assessment name<input value={recPurpose} onChange={e => setRecPurpose(e.target.value)} placeholder="Assessment name" maxLength={191} /></label><div className="modal-actions"><button type="button" className="button button-light button-small" onClick={saveRecordPurpose}>Save assessment</button><button type="button" className="button button-light button-small button-danger" onClick={() => deleteRecordAssessment(recPurpose)}>Delete assessment</button></div><div className="modal-divider" /><label>Receipt number (4 digits)<input value={recReceipt} onChange={e => setRecReceipt(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="OR #" inputMode="numeric" maxLength={4} /></label><div className="modal-actions"><button type="button" className="button button-primary button-small" onClick={saveModalReceipt}>Save receipt</button>{recReceipt.trim() ? <button type="button" className="button button-light button-small" onClick={() => removeModalReceipt(`${recLast}, ${recFirst}`)}>Remove receipt</button> : null}<button type="button" className="button button-light" onClick={() => setRecordModal(null)}>Done</button></div></div></section></div>}
     {toast && <div className="toast"><span className="toast-check"><Check size={14} /></span>{toast}<button onClick={() => setToast('')} aria-label="Dismiss"><X size={15} /></button></div>}
   </main>;
 }

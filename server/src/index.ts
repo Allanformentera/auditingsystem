@@ -313,6 +313,38 @@ app.patch('/api/payments/:id/receipt', auth, auditor, async (req, res) => {
   const payment = await prisma.payment.update({ where: { id: current.id }, data: { reference: receipt || null } });
   res.json({ payment });
 });
+app.patch('/api/students/:id', auth, auditor, async (req, res) => {
+  const firstName = String(req.body.firstName ?? '').trim();
+  const lastName = String(req.body.lastName ?? '').trim();
+  if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the first and last name.' });
+  const current = await prisma.student.findUnique({ where: { id: req.params.id as string } });
+  if (!current) return res.status(404).json({ error: 'Student not found.' });
+  const dupe = await prisma.student.findFirst({ where: { course: current.course, yearLevel: current.yearLevel, block: current.block, major: current.major, firstName, lastName, NOT: { id: current.id } } });
+  if (dupe) return res.status(409).json({ error: 'Another student already has that name in this block.' });
+  const student = await prisma.student.update({ where: { id: current.id }, data: { firstName, lastName } });
+  res.json({ student });
+});
+app.patch('/api/assessments/:id', auth, auditor, async (req, res) => {
+  const purpose = String(req.body.purpose ?? '').trim();
+  if (purpose.length < 2) return res.status(400).json({ error: 'Enter an assessment name of at least 2 characters.' });
+  const current = await prisma.assessment.findUnique({ where: { id: req.params.id as string } });
+  if (!current) return res.status(404).json({ error: 'Assessment not found.' });
+  const assessment = await prisma.assessment.update({ where: { id: current.id }, data: { purpose } });
+  res.json({ assessment });
+});
+app.delete('/api/assessments/:id', auth, auditor, async (req, res) => {
+  const current = await prisma.assessment.findUnique({ where: { id: req.params.id as string } });
+  if (!current) return res.status(404).json({ error: 'Assessment not found.' });
+  const removed = await prisma.$transaction(async tx => {
+    const pays = await tx.payment.findMany({ where: { assessmentId: current.id }, select: { id: true } });
+    const ids = pays.map(p => p.id);
+    if (ids.length) await tx.ledgerEntry.deleteMany({ where: { paymentId: { in: ids } } });
+    await tx.payment.deleteMany({ where: { assessmentId: current.id } });
+    await tx.assessment.delete({ where: { id: current.id } });
+    return ids.length;
+  });
+  res.json({ ok: true, removedPayments: removed });
+});
 
 app.post('/api/expenses', auth, treasurer, receiptUpload.single('receipt'), async (req: SessionRequest, res) => {
   if (!req.file) return res.status(400).json({ error: 'Attach a receipt image or PDF before recording this expense.' });
