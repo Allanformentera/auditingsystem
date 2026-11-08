@@ -5,3 +5,4 @@ server/.env
 server/uploads/*
 !server/uploads/.gitkeep
 *.log
+tsconfig.tsbuildinfo
