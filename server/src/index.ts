@@ -109,6 +109,12 @@ app.get('/api/students', auth, async (req, res) => {
   }, orderBy: [{ course: 'asc' }, { block: 'asc' }, { lastName: 'asc' }, { firstName: 'asc' }] });
   res.json({ students, count: students.length });
 });
+function normalizeBlock(value: string): string {
+  return String(value ?? '')
+    .replace(/^(?:block|blk|section|class)\s*[-#:]?\s*/i, '')
+    .trim();
+}
+
 app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Choose an Excel workbook first.' });
   const course = String(req.body.course || 'BSIT').toUpperCase();
@@ -118,6 +124,7 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
   const courseMajors: Record<string, string[]> = { CAS: ['BA COMM', 'POLSCI'], EDUC: ['BSED', 'BEED'] };
   if ((course === 'CAS' || course === 'EDUC') && !(courseMajors[course] || []).includes(major)) return res.status(400).json({ error: `Choose a ${course} major (${(courseMajors[course] || []).join(' or ')}).` });
   if (!Number.isInteger(yearLevel) || yearLevel < 1 || yearLevel > 6) return res.status(400).json({ error: 'Choose a valid year level.' });
+  const formBlock = String(req.body.block || '').trim();
   const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
   const records: { studentNo?: string; firstName: string; lastName: string; block: string; course: string; major: string; yearLevel: number }[] = [];
   const invalid: string[] = [];
@@ -167,19 +174,27 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
       } else if (cells[0].includes(',')) [lastName, firstName] = cells[0].split(/,(.*)/s).map(v => v.trim());
       else if (cells.length > 1) { lastName = cells[0].replace(/^\d+\.\s*/, ''); firstName = cells[1].trim(); }
       else { invalid.push(`${sheetName}, row ${i + 1}`); continue; }
-      const block = (blockCol >= 0 ? String(values[blockCol] || '').replace(/^(?:block|blk)\s*/i, '') : '') || defaultBlock || String(req.body.block || '').trim();
+      const blockFromCell = blockCol >= 0 ? normalizeBlock(values[blockCol]) : '';
+      const block = blockFromCell || defaultBlock || formBlock;
       if (!lastName || !firstName || !block) { invalid.push(`${sheetName}, row ${i + 1}`); continue; }
       const studentNo = studentNoCol >= 0 ? values[studentNoCol] || undefined : undefined;
       records.push({ ...(studentNo ? { studentNo } : {}), firstName, lastName, block, course, major, yearLevel });
     }
   }
+  console.log('[STUDENT IMPORT]', { course, yearLevel, major: major || '(none)', block: formBlock || '(none)', parsed: records.length, invalidCount: invalid.length });
   let added = 0;
+  let createError: string | null = null;
   for (let i = 0; i < records.length; i += 500) {
-    const batch = await prisma.student.createMany({ data: records.slice(i, i + 500), skipDuplicates: true });
-    added += batch.count;
+    try {
+      const batch = await prisma.student.createMany({ data: records.slice(i, i + 500), skipDuplicates: true });
+      added += batch.count;
+    } catch (err: any) {
+      createError = err?.message || String(err);
+      console.error('[STUDENT IMPORT CREATE ERROR]', createError);
+      break;
+    }
   }
-  const inserted = { added, skipped: records.length - added };
-  const importBlock = String(req.body.block || '').trim();
+  const inserted = { added, skipped: records.length - added, createError };
   const importMajor = course === 'CAS' || course === 'EDUC' ? String(req.body.major || '').toUpperCase() : '';
   const fileBlocks = [...new Set(records.map(r => r.block))];
   const restored = await prisma.student.updateMany({ where: { active: false, course, yearLevel, major: importMajor, ...(fileBlocks.length ? { block: { in: fileBlocks } } : {}) }, data: { active: true } });
@@ -198,7 +213,15 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
     const r = await prisma.payment.createMany({ data: roster.map(s => ({ studentId: s.id, assessmentId: a.id, amount: a.amount })), skipDuplicates: true });
     enrolled += r.count;
   }
-  res.json({ ...inserted, restored: restored.count, enrolled, invalidRows: invalid, parsed: records.length, sheets: workbook.SheetNames });
+  res.json({
+    ...inserted,
+    restored: restored.count,
+    enrolled,
+    invalidRows: invalid,
+    parsed: records.length,
+    sheets: workbook.SheetNames,
+    importParams: { course, yearLevel, major: importMajor || '(none)', block: formBlock || '(none)' },
+  });
 });
 app.delete('/api/students', auth, auditor, async (req, res) => {
   const course = String(req.query.course || '').toUpperCase();
