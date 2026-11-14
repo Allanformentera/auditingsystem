@@ -114,6 +114,12 @@ function normalizeBlock(value: string): string {
     .replace(/^(?:block|blk|section|class)\s*[-#:]?\s*/i, '')
     .trim();
 }
+function cleanName(value: string): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,]+|[\s,]+$/g, '')
+    .trim();
+}
 
 app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Choose an Excel workbook first.' });
@@ -174,6 +180,8 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
       } else if (cells[0].includes(',')) [lastName, firstName] = cells[0].split(/,(.*)/s).map(v => v.trim());
       else if (cells.length > 1) { lastName = cells[0].replace(/^\d+\.\s*/, ''); firstName = cells[1].trim(); }
       else { invalid.push(`${sheetName}, row ${i + 1}`); continue; }
+      lastName = cleanName(lastName);
+      firstName = cleanName(firstName);
       const blockFromCell = blockCol >= 0 ? normalizeBlock(values[blockCol]) : '';
       const block = blockFromCell || defaultBlock || formBlock;
       if (!lastName || !firstName || !block) { invalid.push(`${sheetName}, row ${i + 1}`); continue; }
@@ -182,6 +190,7 @@ app.post('/api/students/import', auth, auditor, memoryUpload.single('file'), asy
     }
   }
   console.log('[STUDENT IMPORT]', { course, yearLevel, major: major || '(none)', block: formBlock || '(none)', parsed: records.length, invalidCount: invalid.length });
+  if (!records.length) return res.status(400).json({ error: 'No student rows were found. Make sure the sheet has First Name and Last Name (or Name) and Block columns.', invalidRows: invalid.slice(0, 20) });
   let added = 0;
   let createError: string | null = null;
   for (let i = 0; i < records.length; i += 500) {
@@ -242,8 +251,8 @@ app.delete('/api/students/:id', auth, auditor, async (req, res) => {
 app.post('/api/students', auth, staff, async (req, res) => {
   const course = String(req.body.course || '').toUpperCase();
   const yearLevel = Number(req.body.yearLevel || 4);
-  const firstName = String(req.body.firstName || '').trim();
-  const lastName = String(req.body.lastName || '').trim();
+  const firstName = cleanName(String(req.body.firstName || ''));
+  const lastName = cleanName(String(req.body.lastName || ''));
   const block = String(req.body.block || '').trim().replace(/^(?:block|blk)\s*/i, '');
   const studentNo = String(req.body.studentNo || '').trim() || undefined;
   if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the first and last name.' });
@@ -337,8 +346,8 @@ app.patch('/api/payments/:id/receipt', auth, auditor, async (req, res) => {
   res.json({ payment });
 });
 app.patch('/api/students/:id', auth, auditor, async (req, res) => {
-  const firstName = String(req.body.firstName ?? '').trim();
-  const lastName = String(req.body.lastName ?? '').trim();
+  const firstName = cleanName(String(req.body.firstName ?? ''));
+  const lastName = cleanName(String(req.body.lastName ?? ''));
   if (!firstName || !lastName) return res.status(400).json({ error: 'Enter the first and last name.' });
   const current = await prisma.student.findUnique({ where: { id: req.params.id as string } });
   if (!current) return res.status(404).json({ error: 'Student not found.' });
@@ -443,8 +452,8 @@ app.post('/api/audit/submissions', auth, auditor, memoryUpload.single('file'), a
     const statusRaw = get(row, ['payment status', 'status']).toLowerCase();
     const reportedPaid = /^(paid|yes|received|complete|completed)$/i.test(statusRaw) ? true : /^(unpaid|no|pending)$/i.test(statusRaw) ? false : null;
     const [lastName, firstName] = studentName.includes(',')
-      ? studentName.split(/,(.*)/s).map(s => s.trim())
-      : (() => { const parts = studentName.trim().split(/\s+/); return [parts.pop() || '', parts.join(' ')]; })();
+      ? studentName.split(/,(.*)/s).map(s => cleanName(s))
+      : (() => { const parts = studentName.trim().split(/\s+/); return [cleanName(parts.pop() || ''), cleanName(parts.join(' '))]; })();
     const normalizedBlock = block.replace(/^(?:block|blk)\s*/i, '');
     const candidates = studentName ? await prisma.student.findMany({ where: { course, yearLevel, ...(listMajor ? { major: listMajor } : {}), ...(normalizedBlock ? { block: normalizedBlock } : {}), firstName: { contains: firstName || '' }, lastName: { contains: lastName || '' } }, take: 2 }) : [];
     let status: MatchStatus = MatchStatus.NOT_ON_ROSTER, details = 'Student name did not match an active roster entry.';
