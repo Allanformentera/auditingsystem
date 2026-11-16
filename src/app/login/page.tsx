@@ -8,10 +8,6 @@ import { apiRequest } from '@/lib/api';
 type AuthUser = { name: string; role: string };
 type LoginResult = { token: string; user: AuthUser };
 
-function dashboardPath(role: string) {
-  return role === 'AUDITOR' ? '/auditor' : '/treasurer';
-}
-
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -24,8 +20,8 @@ export default function LoginPage() {
   useEffect(() => {
     const token = window.localStorage.getItem('campus-ledger-token');
     if (!token) { setCheckingSession(false); return; }
-    void apiRequest<{ user: AuthUser }>('/api/auth/me', token).then(({ user }) => {
-      router.replace(dashboardPath(user.role));
+    void apiRequest<{ user: AuthUser }>('/api/auth/me', token).then(() => {
+      router.replace('/welcome');
     }).catch(() => {
       window.localStorage.removeItem('campus-ledger-token');
       setCheckingSession(false);
@@ -42,7 +38,7 @@ export default function LoginPage() {
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
       window.localStorage.setItem('campus-ledger-token', result.token);
-      router.replace(dashboardPath(result.user.role));
+      router.replace('/welcome');
     } catch (cause) {
       setError(cause instanceof TypeError
         ? 'Unable to reach the sign-in service. Check that the API is running, then try again.'
